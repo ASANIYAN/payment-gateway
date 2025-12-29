@@ -62,22 +62,16 @@ const envSchema = z.object({
 });
 
 function parseEnv() {
-  try {
-    return envSchema.parse(process.env);
-  } catch (error) {
-    if (error instanceof z.ZodError) {
-      console.error("Config validation failed: \n");
-      error.issues.forEach((err) => {
-        console.error(`${err.path.join(".")}: ${err.message}`);
-      });
+  const result = envSchema.safeParse(process.env);
 
-      console.error(
-        "\n💡 Check your .env file and ensure all required variables are set.\n"
-      );
-    }
-
-    throw error;
+  if (!result.success) {
+    result.error.issues.forEach((err) => {
+      console.error(`${err.path.join(".")}: ${err.message}`);
+    });
+    process.exit(1);
   }
+
+  return result.data;
 }
 
 const env = parseEnv();
