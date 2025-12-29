@@ -1,4 +1,4 @@
-CREATE TABLE idempotency_keys {
+CREATE TABLE idempotency_keys (
     key VARCHAR(255) PRIMARY KEY,
     request_path VARCHAR(100) NOT NULL,
     request_params JSONB NOT NULL,
@@ -12,7 +12,7 @@ CREATE TABLE idempotency_keys {
     CONSTRAINT check_recovery_point CHECK (
         recovery_point IN ('started', 'payment_created', 'authorized', 'captured', 'voided', 'refunded', 'finished')
     )
-}
+);
 
 
 CREATE TABLE payments (
@@ -50,12 +50,12 @@ CREATE TABLE payments (
     CONSTRAINT check_positive_amount CHECK (amount > 0),
     CONSTRAINT check_currency_format CHECK (currency ~ '^[A-Z]{3}$'),
     CONSTRAINT check_state_values CHECK (state IN ('PENDING', 'AUTHORIZED', 'CAPTURED', 'VOIDED', 'REFUNDED'))
-)
+);
 
 CREATE INDEX idx_payments_order_id ON payments(order_id);
 CREATE INDEX idx_payments_customer_id ON payments(customer_id);
 CREATE INDEX idx_payments_state_updated ON payments(state, updated_at);
 CREATE INDEX idx_payments_idempotency_key ON payments(idempotency_key);
 CREATE INDEX idx_payments_expires_at ON payments(expires_at) WHERE state = 'AUTHORIZED';
-CREATE INDEX idx_idempotency_keys_created ON idempotency_key(created_at);
-CREATE INDEX idx_idempotency_keys_recovery ON idempotency_key(recovery_point) WHERE recovery_point != 'finished';
+CREATE INDEX idx_idempotency_keys_created ON idempotency_keys(created_at);
+CREATE INDEX idx_idempotency_keys_recovery ON idempotency_keys(recovery_point) WHERE recovery_point != 'finished';
