@@ -64,9 +64,10 @@ export type CreatePaymentRequest = {
   };
 };
 
-export interface PaymentResponse {
+export type PaymentResponse = {
   id: string;
+  order_id: string;
   status: PaymentState;
   amount: number;
   currency: string;
-}
+};
