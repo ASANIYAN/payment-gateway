@@ -100,8 +100,7 @@ export async function cacheResponse(
   );
 }
 
-// Delete old idempotency keys. To be used by reaper job for cleanup
-
+// Get all idempotency keys that are not finished. To be used by completer job to find requests needing recovery
 export async function getStuckIdempotencyKeys(
   thresholdMs: number
 ): Promise<IdempotencyKeyRow[]> {
@@ -113,7 +112,7 @@ export async function getStuckIdempotencyKeys(
   return result.rows;
 }
 
-// Get all idempotency keys that are not finished. To be used by completer job to find requests needing recovery
+// Delete old idempotency keys. To be used by reaper job for cleanup
 export async function deleteOldIdempotencyKeys(
   ageHours: number
 ): Promise<number> {
