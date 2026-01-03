@@ -1,7 +1,7 @@
+import { query } from "..";
 import { PoolClient } from "pg";
-import { PaymentRow, PaymentState } from "@/types";
 import logger from "@/utils/logger";
-import { query } from ".";
+import { PaymentRow, PaymentState } from "@/types";
 
 export type CreatePaymentData = {
   idempotencyKey: string;
@@ -264,8 +264,8 @@ export function isValidStateTransition(
     PENDING: ["AUTHORIZED"],
     AUTHORIZED: ["CAPTURED", "VOIDED"],
     CAPTURED: ["REFUNDED"],
-    VOIDED: [], // Terminal state
-    REFUNDED: [], // Terminal state
+    VOIDED: [],
+    REFUNDED: [],
   };
 
   return validTransitions[currentState]?.includes(newState) || false;

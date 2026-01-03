@@ -1,5 +1,5 @@
 import logger from "@/utils/logger";
-import { query } from ".";
+import { query } from "..";
 import { IdempotencyKeyRow, RecoveryPoint } from "@/types";
 import { PoolClient } from "pg";
 
