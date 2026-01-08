@@ -1,9 +1,10 @@
+import { Server } from "http";
+import { config } from "./config";
 import { randomUUID } from "crypto";
-import express, { Request, Response, NextFunction } from "express";
+import paymentsRouter from "./routes/payments";
 import logger, { httpLogger } from "./utils/logger";
 import { closePool, getPoolStats, testConnection } from "./db";
-import { config } from "./config";
-import { Server } from "http";
+import express, { Request, Response, NextFunction } from "express";
 
 const app = express();
 app.set("trust proxy", true);
@@ -48,6 +49,8 @@ app.get("/", (req: Request, res: Response) => {
     environment: config.nodeEnv,
   });
 });
+
+app.use("/api/v1", paymentsRouter);
 
 app.use((req: Request, res: Response) => {
   res.status(404).json({
