@@ -9,8 +9,8 @@ async function main() {
     logger.info("Testing authorization...");
     const authResponse = await bankClient.authorize(
       {
-        amount: 9999, // $99.99
-        card_number: "4111111111111111", // Test card from spec
+        amount: 10000,
+        card_number: "4111111111111111",
         cvv: "123",
         expiry_month: 12,
         expiry_year: 2030,
@@ -25,7 +25,7 @@ async function main() {
     const idempotentKey = "test-idem-key-replay-" + Date.now();
     await bankClient.authorize(
       {
-        amount: 5000,
+        amount: 10000,
         card_number: "4111111111111111",
         cvv: "123",
         expiry_month: 12,
@@ -37,7 +37,7 @@ async function main() {
     // Call again with same key
     await bankClient.authorize(
       {
-        amount: 5000,
+        amount: 10000,
         card_number: "4111111111111111",
         cvv: "123",
         expiry_month: 12,
@@ -77,6 +77,7 @@ async function main() {
     logger.info("Testing capture...");
     const captureResponse = await bankClient.capture(
       authResponse.authorization_id,
+      authResponse.amount,
       "test-idem-key-capture-" + Date.now()
     );
 

@@ -1,56 +1,60 @@
-import { config } from "@/config";
-import logger, { createChildLogger } from "@/utils/logger";
 import axios, { AxiosInstance, AxiosError } from "axios";
+import { config } from "../config";
+import logger, { createChildLogger } from "../utils/logger";
 
-export type BankAuthorizationRequest = {
+export interface BankAuthorizationRequest {
   amount: number; // In cents
   card_number: string;
   cvv: string;
   expiry_month: number;
   expiry_year: number;
-};
+}
 
-export type BankAuthorizationResponse = {
+export interface BankAuthorizationResponse {
   authorization_id: string;
   status: "approved" | "declined";
   amount: number;
-  card: {
-    last_four: string;
-    brand: string;
-  };
-};
+  currency: string;
+  created_at: string;
+  expires_at: string;
+}
 
-export type BankCaptureRequest = {
+export interface BankCaptureRequest {
   authorization_id: string;
-};
+  amount: number; // Must match authorized amount
+}
 
-export type BankCaptureResponse = {
+export interface BankCaptureResponse {
   capture_id: string;
   status: "captured";
   amount: number;
   authorization_id: string;
-};
+  created_at: string;
+}
 
-export type BankVoidRequest = {
+export interface BankVoidRequest {
   authorization_id: string;
-};
+}
 
-export type BankVoidResponse = {
+export interface BankVoidResponse {
   void_id: string;
   status: "voided";
   authorization_id: string;
-};
+  created_at: string;
+}
 
-export type BankRefundRequest = {
+export interface BankRefundRequest {
   capture_id: string;
-};
+  amount: number; // Amount to refund
+}
 
-export type BankRefundResponse = {
+export interface BankRefundResponse {
   refund_id: string;
   status: "refunded";
   amount: number;
   capture_id: string;
-};
+  created_at: string;
+}
 
 export class BankError extends Error {
   constructor(
@@ -175,12 +179,10 @@ class BankClient {
           "Bank API call failed"
         );
 
-        // Don't retry permanent errors
         if (!bankError.isRetryable) {
           throw bankError;
         }
 
-        // Don't retry if we've exhausted attempts
         if (attempt === maxRetries) {
           log.error(
             { attempts: attempt + 1 },
@@ -200,12 +202,8 @@ class BankClient {
   }
 
   private calculateBackoff(attempt: number): number {
-    // Exponential: 1s, 2s, 4s, 8s
     const exponentialDelay = Math.min(1000 * Math.pow(2, attempt), 10000);
-
-    // Add jitter (random 0-50% of delay)
     const jitter = Math.random() * exponentialDelay * 0.5;
-
     return exponentialDelay + jitter;
   }
 
@@ -217,6 +215,7 @@ class BankClient {
     if (axios.isAxiosError(error)) {
       const axiosError = error as AxiosError;
 
+      // Network errors (no response) - transient
       if (!axiosError.response) {
         return new BankTransientError(
           "Network error or timeout",
@@ -228,14 +227,16 @@ class BankClient {
       const status = axiosError.response.status;
       const data = axiosError.response.data as any;
 
+      // 5xx errors - transient (server issues)
       if (status >= 500) {
         return new BankTransientError(
           data?.message || "Bank server error",
           status,
-          data?.code || "SERVER_ERROR"
+          data?.error || "SERVER_ERROR"
         );
       }
 
+      // 429 Too Many Requests - transient
       if (status === 429) {
         return new BankTransientError(
           "Rate limit exceeded",
@@ -244,20 +245,22 @@ class BankClient {
         );
       }
 
+      // 408 Request Timeout - transient
       if (status === 408) {
         return new BankTransientError("Request timeout", status, "TIMEOUT");
       }
 
+      // 4xx errors (except above) - permanent (client errors)
       if (status >= 400 && status < 500) {
         return new BankPermanentError(
           data?.message || "Bank request error",
           status,
-          data?.code || "CLIENT_ERROR"
+          data?.error || "CLIENT_ERROR"
         );
       }
     }
 
-    // Unknown error to be treated as transient just to be safe
+    // Unknown error - treat as transient to be safe
     return new BankTransientError(
       error.message || "Unknown error",
       undefined,
@@ -299,6 +302,7 @@ class BankClient {
 
   async capture(
     authorizationId: string,
+    amount: number,
     idempotencyKey: string
   ): Promise<BankCaptureResponse> {
     return this.requestWithRetry(
@@ -306,7 +310,10 @@ class BankClient {
       async () => {
         const response = await this.client.post<BankCaptureResponse>(
           "/api/v1/captures",
-          { authorization_id: authorizationId },
+          {
+            authorization_id: authorizationId,
+            amount: amount,
+          },
           {
             headers: {
               "Idempotency-Key": idempotencyKey,
@@ -363,6 +370,7 @@ class BankClient {
 
   async refund(
     captureId: string,
+    amount: number,
     idempotencyKey: string
   ): Promise<BankRefundResponse> {
     return this.requestWithRetry(
@@ -370,7 +378,10 @@ class BankClient {
       async () => {
         const response = await this.client.post<BankRefundResponse>(
           "/api/v1/refunds",
-          { capture_id: captureId },
+          {
+            capture_id: captureId,
+            amount: amount,
+          },
           {
             headers: {
               "Idempotency-Key": idempotencyKey,
