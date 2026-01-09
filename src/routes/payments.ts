@@ -8,19 +8,20 @@ import {
   getIdempotencyKey,
   getPaymentById,
   getPaymentByIdempotencyKey,
+  getPaymentByIdForUpdate,
   getPaymentByOrderId,
   getPaymentsByCustomerId,
   updatePaymentAuthorized,
+  updatePaymentCaptured,
+  updatePaymentVoided,
   updateRecoveryPoint,
 } from "@/db/repositories";
 import { withTransaction } from "@/db";
 import { bankClient, BankPermanentError } from "@/services/bank-client";
+import pino from "pino";
 
 const router = Router();
 
-/**
- * Request validation schemas
- */
 const authorizeRequestSchema = z.object({
   order_id: z.string().min(1, "order_id is required"),
   customer_id: z.string().min(1, "customer_id is required"),
@@ -34,7 +35,7 @@ const authorizeRequestSchema = z.object({
 });
 
 //  Authorize a payment (reserve funds on card)
-router.post("/authorize", async (req: Request, res: Response) => {
+router.post("/payments/authorize", async (req: Request, res: Response) => {
   const idempotencyKey = req.headers["idempotency-key"] as string;
 
   if (!idempotencyKey) {
@@ -119,7 +120,7 @@ router.post("/authorize", async (req: Request, res: Response) => {
 async function processNewAuthorization(
   idempotencyKey: string,
   data: z.infer<typeof authorizeRequestSchema>,
-  log: any,
+  log: pino.Logger<never, boolean>,
   res: Response
 ) {
   try {
@@ -238,7 +239,7 @@ async function processNewAuthorization(
 async function continueAuthorization(
   idempotencyKey: string,
   data: z.infer<typeof authorizeRequestSchema>,
-  log: any,
+  log: pino.Logger<never, boolean>,
   res: Response
 ) {
   log.info("Continuing authorization from recovery point");
@@ -315,10 +316,6 @@ async function continueAuthorization(
   }
 }
 
-/**
- * Resume authorization by calling bank
- * Safe to retry because we use the same idempotency key
- */
 async function resumeBankAuthorization(
   idempotencyKey: string,
   payment: any,
@@ -490,5 +487,380 @@ router.get(
     }
   }
 );
+
+// POST /capture: capture a previously authorized payment
+
+router.post("/payments/capture", async (req: Request, res: Response) => {
+  const idempotencyKey = req.headers["idempotency-key"] as string;
+
+  if (!idempotencyKey) {
+    return res.status(400).json({
+      error: "missing_idempotency_key",
+      message: "Idempotency-Key header is required",
+    });
+  }
+
+  const log = createChildLogger({ idempotencyKey, requestId: req.id });
+
+  try {
+    // Validate request body
+    const captureRequestSchema = z.object({
+      payment_id: z.string().uuid("Invalid payment ID"),
+    });
+
+    const data = captureRequestSchema.parse(req.body);
+
+    log.info({ paymentId: data.payment_id }, "Capture request received");
+
+    // Check if we've already processed this idempotency key
+    const existingKey = await getIdempotencyKey(idempotencyKey);
+
+    if (existingKey?.recovery_point === "finished") {
+      log.info("Returning cached capture response");
+      return res
+        .status(existingKey.response_status!)
+        .json(existingKey.response_body);
+    }
+
+    // Process capture
+    return await processCapturePayment(
+      idempotencyKey,
+      data.payment_id,
+      log,
+      res
+    );
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      log.warn({ errors: error.issues }, "Validation failed");
+      return res.status(400).json({
+        error: "validation_error",
+        message: "Invalid request data",
+        details: error.issues,
+      });
+    }
+
+    log.error({ error }, "Capture failed");
+    return res.status(500).json({
+      error: "internal_error",
+      message: "An unexpected error occurred",
+    });
+  }
+});
+
+async function processCapturePayment(
+  idempotencyKey: string,
+  paymentId: string,
+  log: any,
+  res: Response
+) {
+  try {
+    // ATOMIC PHASE 1: Validate payment state and lock
+    log.debug("Phase 1: Validating payment state");
+
+    const payment = await withTransaction(async (client) => {
+      // Get payment with row lock to prevent concurrent capture/void
+      const payment = await getPaymentByIdForUpdate(client, paymentId);
+
+      if (!payment) {
+        throw new Error("PAYMENT_NOT_FOUND");
+      }
+
+      if (payment.state !== "AUTHORIZED") {
+        throw new Error(`INVALID_STATE_TRANSITION:${payment.state}`);
+      }
+
+      if (payment.expires_at && new Date(payment.expires_at) < new Date()) {
+        throw new Error("AUTHORIZATION_EXPIRED");
+      }
+
+      await createIdempotencyKey(idempotencyKey, "/capture", {
+        payment_id: paymentId,
+      });
+
+      log.info(
+        { paymentId, state: payment.state },
+        "Payment validated for capture"
+      );
+      return payment;
+    });
+
+    // ATOMIC PHASE 2: Call bank API
+    log.debug("Phase 2: Calling bank capture API");
+
+    const bankResponse = await bankClient.capture(
+      payment.authorization_id!,
+      payment.amount,
+      `gateway-capture-${idempotencyKey}`
+    );
+
+    // ATOMIC PHASE 3: Save capture result
+    log.debug("Phase 3: Saving capture result");
+
+    await withTransaction(async (client) => {
+      await updatePaymentCaptured(client, paymentId, bankResponse.capture_id);
+
+      log.info({ captureId: bankResponse.capture_id }, "Capture successful");
+    });
+
+    // ATOMIC PHASE 4: Cache response
+    const response = {
+      id: paymentId,
+      order_id: payment.order_id,
+      status: "CAPTURED",
+      amount: payment.amount,
+      currency: payment.currency,
+      capture_id: bankResponse.capture_id,
+    };
+
+    await withTransaction(async (client) => {
+      await cacheResponse(client, idempotencyKey, 200, response);
+    });
+
+    return res.status(200).json(response);
+  } catch (error: any) {
+    log.error({ error }, "Capture processing failed");
+
+    if (error.message === "PAYMENT_NOT_FOUND") {
+      const errorResponse = {
+        error: "payment_not_found",
+        message: "Payment not found",
+      };
+
+      await withTransaction(async (client) => {
+        await cacheResponse(client, idempotencyKey, 404, errorResponse);
+      });
+
+      return res.status(404).json(errorResponse);
+    }
+
+    if (error.message?.startsWith("INVALID_STATE_TRANSITION")) {
+      const currentState = error.message.split(":")[1];
+      const errorResponse = {
+        error: "invalid_state",
+        message: `Cannot capture payment in ${currentState} state`,
+        current_state: currentState,
+      };
+
+      await withTransaction(async (client) => {
+        await cacheResponse(client, idempotencyKey, 400, errorResponse);
+      });
+
+      return res.status(400).json(errorResponse);
+    }
+
+    if (error.message === "AUTHORIZATION_EXPIRED") {
+      const errorResponse = {
+        error: "authorization_expired",
+        message: "Authorization has expired (7 days), cannot capture",
+      };
+
+      await withTransaction(async (client) => {
+        await cacheResponse(client, idempotencyKey, 400, errorResponse);
+      });
+
+      return res.status(400).json(errorResponse);
+    }
+
+    // Handle bank errors
+    if (error instanceof BankPermanentError) {
+      const errorResponse = {
+        error: "capture_failed",
+        message: error.message,
+        code: error.code,
+      };
+
+      await withTransaction(async (client) => {
+        await cacheResponse(client, idempotencyKey, 400, errorResponse);
+      });
+
+      return res.status(400).json(errorResponse);
+    }
+
+    // Transient errors
+    return res.status(503).json({
+      error: "service_unavailable",
+      message: "Temporary failure, please retry",
+    });
+  }
+}
+
+// POST /void: Void (cancel) a previously authorized payment
+
+router.post("/payments/void", async (req: Request, res: Response) => {
+  const idempotencyKey = req.headers["idempotency-key"] as string;
+
+  if (!idempotencyKey) {
+    return res.status(400).json({
+      error: "missing_idempotency_key",
+      message: "Idempotency-Key header is required",
+    });
+  }
+
+  const log = createChildLogger({ idempotencyKey, requestId: req.id });
+
+  try {
+    // Validate request body
+    const voidRequestSchema = z.object({
+      payment_id: z.string().uuid("Invalid payment ID"),
+    });
+
+    const data = voidRequestSchema.parse(req.body);
+
+    log.info({ paymentId: data.payment_id }, "Void request received");
+
+    const existingKey = await getIdempotencyKey(idempotencyKey);
+
+    if (existingKey?.recovery_point === "finished") {
+      log.info("Returning cached void response");
+      return res
+        .status(existingKey.response_status!)
+        .json(existingKey.response_body);
+    }
+
+    if (existingKey) {
+      log.warn("Idempotency key exists but not finished");
+      return res.status(409).json({
+        error: "request_in_progress",
+        message: "Another request with this idempotency key is being processed",
+      });
+    }
+
+    return await processVoidPayment(idempotencyKey, data.payment_id, log, res);
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      log.warn({ errors: error.issues }, "Validation failed");
+      return res.status(400).json({
+        error: "validation_error",
+        message: "Invalid request data",
+        details: error.issues,
+      });
+    }
+
+    log.error({ error }, "Void failed");
+    return res.status(500).json({
+      error: "internal_error",
+      message: "An unexpected error occurred",
+    });
+  }
+});
+
+async function processVoidPayment(
+  idempotencyKey: string,
+  paymentId: string,
+  log: any,
+  res: Response
+) {
+  try {
+    // ATOMIC PHASE 1: Validate payment state and lock
+    log.debug("Phase 1: Validating payment state");
+
+    const payment = await withTransaction(async (client) => {
+      // Get payment with row lock to prevent concurrent capture/void
+      const payment = await getPaymentByIdForUpdate(client, paymentId);
+
+      if (!payment) {
+        throw new Error("PAYMENT_NOT_FOUND");
+      }
+
+      // Validate state transition
+      if (payment.state !== "AUTHORIZED") {
+        throw new Error(`INVALID_STATE_TRANSITION:${payment.state}`);
+      }
+
+      // Create idempotency key for void operation
+      await createIdempotencyKey(idempotencyKey, "/void", {
+        payment_id: paymentId,
+      });
+
+      log.info(
+        { paymentId, state: payment.state },
+        "Payment validated for void"
+      );
+      return payment;
+    });
+
+    // ATOMIC PHASE 2: Call bank API
+    log.debug("Phase 2: Calling bank void API");
+
+    const bankResponse = await bankClient.void(
+      payment.authorization_id!,
+      `gateway-void-${idempotencyKey}`
+    );
+
+    // ATOMIC PHASE 3: Save void result
+    log.debug("Phase 3: Saving void result");
+
+    await withTransaction(async (client) => {
+      await updatePaymentVoided(client, paymentId, bankResponse.void_id);
+
+      log.info({ voidId: bankResponse.void_id }, "Void successful");
+    });
+
+    // ATOMIC PHASE 4: Cache response
+    const response = {
+      id: paymentId,
+      order_id: payment.order_id,
+      status: "VOIDED",
+      amount: payment.amount,
+      currency: payment.currency,
+      void_id: bankResponse.void_id,
+    };
+
+    await withTransaction(async (client) => {
+      await cacheResponse(client, idempotencyKey, 200, response);
+    });
+
+    return res.status(200).json(response);
+  } catch (error: any) {
+    log.error({ error }, "Void processing failed");
+
+    if (error.message === "PAYMENT_NOT_FOUND") {
+      const errorResponse = {
+        error: "payment_not_found",
+        message: "Payment not found",
+      };
+
+      await withTransaction(async (client) => {
+        await cacheResponse(client, idempotencyKey, 404, errorResponse);
+      });
+
+      return res.status(404).json(errorResponse);
+    }
+
+    if (error.message?.startsWith("INVALID_STATE_TRANSITION")) {
+      const currentState = error.message.split(":")[1];
+      const errorResponse = {
+        error: "invalid_state",
+        message: `Cannot void payment in ${currentState} state`,
+        current_state: currentState,
+      };
+
+      await withTransaction(async (client) => {
+        await cacheResponse(client, idempotencyKey, 400, errorResponse);
+      });
+
+      return res.status(400).json(errorResponse);
+    }
+
+    if (error instanceof BankPermanentError) {
+      const errorResponse = {
+        error: "void_failed",
+        message: error.message,
+        code: error.code,
+      };
+
+      await withTransaction(async (client) => {
+        await cacheResponse(client, idempotencyKey, 400, errorResponse);
+      });
+
+      return res.status(400).json(errorResponse);
+    }
+
+    return res.status(503).json({
+      error: "service_unavailable",
+      message: "Temporary failure, please retry",
+    });
+  }
+}
 
 export default router;
