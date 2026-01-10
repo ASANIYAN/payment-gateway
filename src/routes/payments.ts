@@ -13,6 +13,7 @@ import {
   getPaymentsByCustomerId,
   updatePaymentAuthorized,
   updatePaymentCaptured,
+  updatePaymentRefunded,
   updatePaymentVoided,
   updateRecoveryPoint,
 } from "@/db/repositories";
@@ -856,6 +857,210 @@ async function processVoidPayment(
       return res.status(400).json(errorResponse);
     }
 
+    return res.status(503).json({
+      error: "service_unavailable",
+      message: "Temporary failure, please retry",
+    });
+  }
+}
+
+// POST /refund: Refund a previously captured payment
+
+router.post("/payments/refund", async (req: Request, res: Response) => {
+  const idempotencyKey = req.headers["idempotency-key"] as string;
+
+  if (!idempotencyKey) {
+    return res.status(400).json({
+      error: "missing_idempotency_key",
+      message: "Idempotency-Key header is required",
+    });
+  }
+
+  const log = createChildLogger({ idempotencyKey, requestId: req.id });
+
+  try {
+    const refundRequestSchema = z.object({
+      payment_id: z.string().uuid("Invalid payment ID"),
+    });
+
+    const data = refundRequestSchema.parse(req.body);
+
+    log.info({ paymentId: data.payment_id }, "Refund request received");
+
+    const existingKey = await getIdempotencyKey(idempotencyKey);
+
+    if (existingKey?.recovery_point === "finished") {
+      log.info("Returning cached refund response");
+      return res
+        .status(existingKey.response_status!)
+        .json(existingKey.response_body);
+    }
+
+    if (existingKey) {
+      log.warn("Idempotency key exists but not finished");
+      return res.status(409).json({
+        error: "request_in_progress",
+        message: "Another request with this idempotency key is being processed",
+      });
+    }
+
+    return await processRefundPayment(
+      idempotencyKey,
+      data.payment_id,
+      log,
+      res
+    );
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      log.warn({ errors: error.issues }, "Validation failed");
+      return res.status(400).json({
+        error: "validation_error",
+        message: "Invalid request data",
+        details: error.issues,
+      });
+    }
+
+    log.error({ error }, "Refund failed");
+    return res.status(500).json({
+      error: "internal_error",
+      message: "An unexpected error occurred",
+    });
+  }
+});
+
+async function processRefundPayment(
+  idempotencyKey: string,
+  paymentId: string,
+  log: any,
+  res: Response
+) {
+  try {
+    // ATOMIC PHASE 1: Validate payment state and lock
+    log.debug("Phase 1: Validating payment state");
+
+    const payment = await withTransaction(async (client) => {
+      // Get payment with row lock
+      const payment = await getPaymentByIdForUpdate(client, paymentId);
+
+      if (!payment) {
+        throw new Error("PAYMENT_NOT_FOUND");
+      }
+
+      // Validate state transition
+      if (payment.state !== "CAPTURED") {
+        throw new Error(`INVALID_STATE_TRANSITION:${payment.state}`);
+      }
+
+      // Must have capture_id to refund
+      if (!payment.capture_id) {
+        throw new Error("MISSING_CAPTURE_ID");
+      }
+
+      // Create idempotency key for refund operation
+      await createIdempotencyKey(idempotencyKey, "/refund", {
+        payment_id: paymentId,
+      });
+
+      log.info(
+        { paymentId, state: payment.state },
+        "Payment validated for refund"
+      );
+      return payment;
+    });
+
+    // ATOMIC PHASE 2: Call bank API
+    log.debug("Phase 2: Calling bank refund API");
+
+    const bankResponse = await bankClient.refund(
+      payment.capture_id!,
+      payment.amount,
+      `gateway-refund-${idempotencyKey}`
+    );
+
+    // ATOMIC PHASE 3: Save refund result
+    log.debug("Phase 3: Saving refund result");
+
+    await withTransaction(async (client) => {
+      await updatePaymentRefunded(client, paymentId, bankResponse.refund_id);
+
+      log.info({ refundId: bankResponse.refund_id }, "Refund successful");
+    });
+
+    // ATOMIC PHASE 4: Cache response
+    const response = {
+      id: paymentId,
+      order_id: payment.order_id,
+      status: "REFUNDED",
+      amount: payment.amount,
+      currency: payment.currency,
+      refund_id: bankResponse.refund_id,
+    };
+
+    await withTransaction(async (client) => {
+      await cacheResponse(client, idempotencyKey, 200, response);
+    });
+
+    return res.status(200).json(response);
+  } catch (error: any) {
+    log.error({ error }, "Refund processing failed");
+
+    // Handle specific errors
+    if (error.message === "PAYMENT_NOT_FOUND") {
+      const errorResponse = {
+        error: "payment_not_found",
+        message: "Payment not found",
+      };
+
+      await withTransaction(async (client) => {
+        await cacheResponse(client, idempotencyKey, 404, errorResponse);
+      });
+
+      return res.status(404).json(errorResponse);
+    }
+
+    if (error.message?.startsWith("INVALID_STATE_TRANSITION")) {
+      const currentState = error.message.split(":")[1];
+      const errorResponse = {
+        error: "invalid_state",
+        message: `Cannot refund payment in ${currentState} state. Must be CAPTURED.`,
+        current_state: currentState,
+      };
+
+      await withTransaction(async (client) => {
+        await cacheResponse(client, idempotencyKey, 400, errorResponse);
+      });
+
+      return res.status(400).json(errorResponse);
+    }
+
+    if (error.message === "MISSING_CAPTURE_ID") {
+      const errorResponse = {
+        error: "invalid_payment",
+        message: "Payment has no capture_id. Cannot refund.",
+      };
+
+      await withTransaction(async (client) => {
+        await cacheResponse(client, idempotencyKey, 400, errorResponse);
+      });
+
+      return res.status(400).json(errorResponse);
+    }
+
+    if (error instanceof BankPermanentError) {
+      const errorResponse = {
+        error: "refund_failed",
+        message: error.message,
+        code: error.code,
+      };
+
+      await withTransaction(async (client) => {
+        await cacheResponse(client, idempotencyKey, 400, errorResponse);
+      });
+
+      return res.status(400).json(errorResponse);
+    }
+
+    // Transient errors
     return res.status(503).json({
       error: "service_unavailable",
       message: "Temporary failure, please retry",
