@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { unknown, z } from "zod";
 import { Router, Request, Response } from "express";
 import logger, { createChildLogger } from "@/utils/logger";
 import {
@@ -20,6 +20,7 @@ import {
 import { withTransaction } from "@/db";
 import { bankClient, BankPermanentError } from "@/services/bank-client";
 import pino from "pino";
+import { PaymentResponse } from "@/types";
 
 const router = Router();
 
@@ -123,7 +124,7 @@ async function processNewAuthorization(
   data: z.infer<typeof authorizeRequestSchema>,
   log: pino.Logger<never, boolean>,
   res: Response
-) {
+): Promise<PaymentResponse | unknown> {
   try {
     // ATOMIC PHASE 1: Create idempotency key and payment record
     log.debug("Phase 1: Creating idempotency key and payment");

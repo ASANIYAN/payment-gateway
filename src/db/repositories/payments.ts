@@ -220,6 +220,33 @@ export async function updatePaymentError(
   logger.warn({ paymentId, error }, "Payment error recorded");
 }
 
+export async function updatePaymentExpiredAt(
+  client: PoolClient,
+  paymentId: string,
+  expiresAt: string
+): Promise<PaymentRow> {
+  const expires_at = new Date(expiresAt);
+
+  const result = await client.query<PaymentRow>(
+    `UPDATE payments 
+     SET expires_at = $2,
+         updated_at = NOW()
+     WHERE id = $1
+     RETURNING *`,
+    [paymentId, expires_at]
+  );
+
+  logger.info(
+    {
+      paymentId,
+      expires_at,
+    },
+    "Payment expires_at updated"
+  );
+
+  return result.rows[0];
+}
+
 export async function getStuckPendingPayments(
   thresholdMs: number
 ): Promise<PaymentRow[]> {

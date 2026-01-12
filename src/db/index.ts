@@ -139,3 +139,31 @@ export function getPoolStats() {
     waiting: pool.waitingCount,
   };
 }
+
+export function isDatabaseConnectionError(error: any): boolean {
+  if (!error) return false;
+
+  const networkErrors = [
+    "ECONNREFUSED",
+    "ETIMEDOUT",
+    "ECONNRESET",
+    "ENOTFOUND",
+  ];
+  if (networkErrors.includes(error.code)) {
+    return true;
+  }
+
+  const pgConnectionErrors = [
+    "57P01",
+    "57P02",
+    "57P03",
+    "08000",
+    "08003",
+    "08006",
+  ];
+  if (pgConnectionErrors.includes(error.code)) {
+    return true;
+  }
+
+  return false;
+}

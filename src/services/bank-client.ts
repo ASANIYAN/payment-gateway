@@ -1,6 +1,7 @@
 import axios, { AxiosInstance, AxiosError } from "axios";
 import { config } from "../config";
 import logger, { createChildLogger } from "../utils/logger";
+import { PERMANENT_ERROR_CODES } from "@/types/bank-errors";
 
 export interface BankAuthorizationRequest {
   amount: number; // In cents
@@ -211,11 +212,12 @@ class BankClient {
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
+  //  Classify error as permanent or transient: This determines if we should retry or not
+
   private classifyError(error: any): BankError {
     if (axios.isAxiosError(error)) {
       const axiosError = error as AxiosError;
 
-      // Network errors (no response) - transient
       if (!axiosError.response) {
         return new BankTransientError(
           "Network error or timeout",
@@ -226,17 +228,17 @@ class BankClient {
 
       const status = axiosError.response.status;
       const data = axiosError.response.data as any;
+      const errorCode = data?.error;
+      const errorMessage = data?.message || "Unknown error";
 
-      // 5xx errors - transient (server issues)
       if (status >= 500) {
         return new BankTransientError(
-          data?.message || "Bank server error",
+          errorMessage,
           status,
-          data?.error || "SERVER_ERROR"
+          errorCode || "SERVER_ERROR"
         );
       }
 
-      // 429 Too Many Requests - transient
       if (status === 429) {
         return new BankTransientError(
           "Rate limit exceeded",
@@ -245,29 +247,38 @@ class BankClient {
         );
       }
 
-      // 408 Request Timeout - transient
       if (status === 408) {
         return new BankTransientError("Request timeout", status, "TIMEOUT");
       }
 
-      // 4xx errors (except above) - permanent (client errors)
       if (status >= 400 && status < 500) {
+        if (PERMANENT_ERROR_CODES.includes(errorCode)) {
+          return new BankPermanentError(errorMessage, status, errorCode);
+        }
+
+        if (errorCode === "missing_idempotency_key") {
+          return new BankTransientError(
+            "Missing idempotency key (programming error)",
+            status,
+            errorCode
+          );
+        }
+
         return new BankPermanentError(
-          data?.message || "Bank request error",
+          errorMessage,
           status,
-          data?.error || "CLIENT_ERROR"
+          errorCode || "CLIENT_ERROR"
         );
       }
     }
 
-    // Unknown error - treat as transient to be safe
+    // Unknown error: to be treated as transient to be safe
     return new BankTransientError(
       error.message || "Unknown error",
       undefined,
       "UNKNOWN_ERROR"
     );
   }
-
   async authorize(
     request: BankAuthorizationRequest,
     idempotencyKey: string
@@ -402,6 +413,35 @@ class BankClient {
       },
       idempotencyKey
     );
+  }
+
+  async getAuthorizationStatus(
+    authorizationId: string
+  ): Promise<BankAuthorizationResponse> {
+    try {
+      const response = await this.client.get<BankAuthorizationResponse>(
+        `/api/v1/authorizations/${authorizationId}`
+      );
+
+      logger.debug(
+        { authorizationId, status: response.data.status },
+        "Retrieved authorization status"
+      );
+
+      return response.data;
+    } catch (error) {
+      if (axios.isAxiosError(error)) {
+        const axiosError = error as AxiosError;
+
+        if (axiosError.response?.status === 404) {
+          logger.info(
+            { authorizationId },
+            "Authorization not found (may be expired or invalid)"
+          );
+        }
+      }
+      throw this.classifyError(error);
+    }
   }
 }
 
