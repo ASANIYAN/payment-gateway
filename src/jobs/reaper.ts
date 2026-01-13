@@ -17,7 +17,6 @@ export async function runReaper() {
   log.info("Reaper job started");
 
   try {
-    // Delete old idempotency keys
     const deletedCount = await deleteOldIdempotencyKeys(
       config.jobs.cleanupAgeHours
     );
