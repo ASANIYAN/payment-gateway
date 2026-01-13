@@ -5,6 +5,7 @@ import paymentsRouter from "./routes/payments";
 import logger, { httpLogger } from "./utils/logger";
 import { closePool, getPoolStats, testConnection } from "./db";
 import express, { Request, Response, NextFunction } from "express";
+import { startJobs, stopJobs } from "./jobs";
 
 const app = express();
 app.set("trust proxy", true);
@@ -83,6 +84,10 @@ async function startServer() {
     logger.info("Checking DB conn");
     await testConnection();
 
+    // Start background jobs
+    logger.info("Starting background jobs...");
+    await startJobs();
+
     const server = app.listen(config.port, () => {
       logger.info(
         {
@@ -119,6 +124,7 @@ function setUpGracefulShutdown(server: Server) {
       logger.info("HTTP server closed");
 
       try {
+        await stopJobs();
         await closePool();
         logger.info("Database pool closed");
         logger.info("Graceful shutdown");

@@ -1,4 +1,4 @@
-import { unknown, z } from "zod";
+import { z } from "zod";
 import { Router, Request, Response } from "express";
 import logger, { createChildLogger } from "@/utils/logger";
 import {
@@ -166,14 +166,13 @@ async function processNewAuthorization(
         expiry_month: parseInt(expMonth),
         expiry_year: parseInt(expYear),
       },
-      `gateway-${idempotencyKey}` // to distinguish from bank's own keys
+      `gateway-${idempotencyKey}`
     );
 
     // ATOMIC PHASE 3: Save authorization result
     log.debug("Phase 3: Saving authorization result");
 
     await withTransaction(async (client) => {
-      // Update payment to AUTHORIZED
       await updatePaymentAuthorized(
         client,
         payment.id,
@@ -182,7 +181,6 @@ async function processNewAuthorization(
         "unknown" // Bank does not return card brand in response
       );
 
-      // Update recovery point: authorized
       await updateRecoveryPoint(client, idempotencyKey, "authorized");
 
       log.info(
