@@ -2,6 +2,10 @@ import { query } from "..";
 import { PoolClient } from "pg";
 import logger from "@/utils/logger";
 import { PaymentRow, PaymentState } from "@/types";
+import {
+  PaymentStateMachine,
+  PaymentStateError,
+} from "@/services/payment-state-machine";
 
 export type CreatePaymentData = {
   idempotencyKey: string;
@@ -10,6 +14,8 @@ export type CreatePaymentData = {
   amount: number;
   currency: string;
 };
+
+export { PaymentStateError } from "@/services/payment-state-machine";
 
 export async function createPayment(
   client: PoolClient,
@@ -104,39 +110,17 @@ export async function updatePaymentAuthorized(
   cardLastFour?: string,
   cardBrand?: string
 ): Promise<PaymentRow> {
-  const expiresAt = new Date();
-  expiresAt.setDate(expiresAt.getDate() + 7); // Authorization expires in 7 days
-
-  const result = await client.query<PaymentRow>(
-    `UPDATE payments 
-     SET state = 'AUTHORIZED',
-         authorization_id = $2,
-         card_last_four = $3,
-         card_brand = $4,
-         expires_at = $5,
-         authorized_at = NOW(),
-         updated_at = NOW()
-     WHERE id = $1
-     RETURNING *`,
-    [
-      paymentId,
-      authorizationId,
-      cardLastFour || null,
-      cardBrand || null,
-      expiresAt,
-    ]
-  );
-
-  logger.info(
-    {
-      paymentId,
-      authorizationId,
-      expiresAt,
-    },
-    "Payment authorized"
-  );
-
-  return result.rows[0];
+  return updatePaymentState(client, paymentId, "AUTHORIZED", {
+    authorization_id: authorizationId,
+    card_last_four: cardLastFour || null,
+    card_brand: cardBrand || null,
+    expires_at: (() => {
+      const expiresAt = new Date();
+      expiresAt.setDate(expiresAt.getDate() + 7);
+      return expiresAt;
+    })(),
+    authorized_at: new Date(),
+  });
 }
 
 export async function updatePaymentCaptured(
@@ -144,20 +128,10 @@ export async function updatePaymentCaptured(
   paymentId: string,
   captureId: string
 ): Promise<PaymentRow> {
-  const result = await client.query<PaymentRow>(
-    `UPDATE payments 
-     SET state = 'CAPTURED',
-         capture_id = $2,
-         captured_at = NOW(),
-         updated_at = NOW()
-     WHERE id = $1
-     RETURNING *`,
-    [paymentId, captureId]
-  );
-
-  logger.info({ paymentId, captureId }, "Payment captured");
-
-  return result.rows[0];
+  return updatePaymentState(client, paymentId, "CAPTURED", {
+    capture_id: captureId,
+    captured_at: new Date(),
+  });
 }
 
 export async function updatePaymentVoided(
@@ -165,20 +139,10 @@ export async function updatePaymentVoided(
   paymentId: string,
   voidId: string
 ): Promise<PaymentRow> {
-  const result = await client.query<PaymentRow>(
-    `UPDATE payments 
-     SET state = 'VOIDED',
-         void_id = $2,
-         voided_at = NOW(),
-         updated_at = NOW()
-     WHERE id = $1
-     RETURNING *`,
-    [paymentId, voidId]
-  );
-
-  logger.info({ paymentId, voidId }, "Payment voided");
-
-  return result.rows[0];
+  return updatePaymentState(client, paymentId, "VOIDED", {
+    void_id: voidId,
+    voided_at: new Date(),
+  });
 }
 
 export async function updatePaymentRefunded(
@@ -186,20 +150,78 @@ export async function updatePaymentRefunded(
   paymentId: string,
   refundId: string
 ): Promise<PaymentRow> {
-  const result = await client.query<PaymentRow>(
-    `UPDATE payments 
-     SET state = 'REFUNDED',
-         refund_id = $2,
-         refunded_at = NOW(),
-         updated_at = NOW()
-     WHERE id = $1
-     RETURNING *`,
-    [paymentId, refundId]
-  );
+  return updatePaymentState(client, paymentId, "REFUNDED", {
+    refund_id: refundId,
+    refunded_at: new Date(),
+  });
+}
 
-  logger.info({ paymentId, refundId }, "Payment refunded");
+/**
+ * Core function to update payment state with validation
+ */
+export async function updatePaymentState(
+  client: PoolClient,
+  paymentId: string,
+  newState: PaymentState,
+  additionalFields: Partial<PaymentRow> = {}
+): Promise<PaymentRow> {
+  try {
+    // Get current payment for validation
+    const currentPayment = await getPaymentByIdForUpdate(client, paymentId);
+    if (!currentPayment) {
+      throw new Error(`Payment ${paymentId} not found`);
+    }
 
-  return result.rows[0];
+    // Application-level validation (fast fail)
+    PaymentStateMachine.validateTransition(currentPayment.state, newState);
+
+    // Build dynamic SET clause for additional fields
+    const setFields: string[] = ["state = $1", "updated_at = NOW()"];
+    const values: any[] = [newState];
+    let paramIndex = 2;
+
+    for (const [key, value] of Object.entries(additionalFields)) {
+      setFields.push(`${key} = $${paramIndex}`);
+      values.push(value);
+      paramIndex++;
+    }
+
+    values.push(paymentId); // WHERE id = $paramIndex
+
+    const query = `
+      UPDATE payments 
+      SET ${setFields.join(", ")}
+      WHERE id = $${paramIndex}
+      RETURNING *
+    `;
+
+    const result = await client.query<PaymentRow>(query, values);
+
+    if (result.rows.length === 0) {
+      throw new Error(`Payment ${paymentId} not found during update`);
+    }
+
+    logger.info(
+      {
+        paymentId,
+        oldState: currentPayment.state,
+        newState,
+        additionalFields: Object.keys(additionalFields),
+      },
+      "Payment state updated"
+    );
+
+    return result.rows[0];
+  } catch (error: any) {
+    if (error.message?.includes("Invalid transition")) {
+      logger.warn(
+        { paymentId, newState, error: error.message },
+        "Invalid state transition blocked by database"
+      );
+      throw new PaymentStateError(error.message);
+    }
+    throw error;
+  }
 }
 
 export async function updatePaymentError(
@@ -283,17 +305,12 @@ export async function deletePayment(
   logger.info({ paymentId }, "Payment deleted");
 }
 
+/**
+ * @deprecated Use PaymentStateMachine.canTransition() instead
+ */
 export function isValidStateTransition(
   currentState: PaymentState,
   newState: PaymentState
 ): boolean {
-  const validTransitions: Record<PaymentState, PaymentState[]> = {
-    PENDING: ["AUTHORIZED"],
-    AUTHORIZED: ["CAPTURED", "VOIDED"],
-    CAPTURED: ["REFUNDED"],
-    VOIDED: [],
-    REFUNDED: [],
-  };
-
-  return validTransitions[currentState]?.includes(newState) || false;
+  return PaymentStateMachine.canTransition(currentState, newState);
 }

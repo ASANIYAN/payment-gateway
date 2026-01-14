@@ -2,6 +2,12 @@ import logger from "@/utils/logger";
 import { query } from "..";
 import { IdempotencyKeyRow, RecoveryPoint } from "@/types";
 import { PoolClient } from "pg";
+import {
+  PaymentStateMachine,
+  RecoveryPointError,
+} from "@/services/payment-state-machine";
+
+export { RecoveryPointError } from "@/services/payment-state-machine";
 
 export async function createIdempotencyKey(
   key: string,
@@ -72,15 +78,53 @@ export async function updateRecoveryPoint(
   key: string,
   recoveryPoint: RecoveryPoint
 ): Promise<void> {
-  await client.query(
-    `UPDATE idempotency_keys SET recovery_point = $1, updated_at = NOW() WHERE key = $2`,
-    [recoveryPoint, key]
-  );
+  try {
+    // Get current recovery point for validation
+    const current = await getIdempotencyKeyForUpdate(client, key);
+    if (!current) {
+      throw new Error(`Idempotency key ${key} not found`);
+    }
 
-  logger.debug(
-    { idempotencyKey: key, recoveryPoint },
-    "Recovery point updated"
-  );
+    // Application-level validation (fast fail)
+    PaymentStateMachine.validateRecoveryTransition(
+      current.recovery_point,
+      recoveryPoint
+    );
+
+    await client.query(
+      `UPDATE idempotency_keys SET recovery_point = $1, updated_at = NOW() WHERE key = $2`,
+      [recoveryPoint, key]
+    );
+
+    logger.debug(
+      {
+        idempotencyKey: key,
+        oldPoint: current.recovery_point,
+        newPoint: recoveryPoint,
+      },
+      "Recovery point updated"
+    );
+  } catch (error: any) {
+    if (error.message?.includes("Invalid recovery point transition")) {
+      logger.warn(
+        { idempotencyKey: key, recoveryPoint, error: error.message },
+        "Invalid recovery point transition blocked by database"
+      );
+      throw new RecoveryPointError(error.message);
+    }
+    throw error;
+  }
+}
+
+/**
+ * Safely update recovery point with validation and error handling
+ */
+export async function advanceRecoveryPoint(
+  client: PoolClient,
+  key: string,
+  newPoint: RecoveryPoint
+): Promise<void> {
+  return updateRecoveryPoint(client, key, newPoint);
 }
 
 export async function cacheResponse(

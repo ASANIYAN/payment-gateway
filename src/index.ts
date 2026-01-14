@@ -11,14 +11,40 @@ const app = express();
 app.set("trust proxy", true);
 
 app.use((req: Request, res: Response, next: NextFunction) => {
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("X-Frame-Options", "DENY");
+  res.setHeader("X-XSS-Protection", "1; mode=block");
+
   req.id = randomUUID();
   res.setHeader("X-Request-ID", req.id);
   next();
 });
 
 app.use(httpLogger);
-app.use(express.json({ limit: "1mb" }));
-app.use(express.urlencoded({ extended: true }));
+app.use(express.json({ limit: "1mb", strict: true }));
+app.use(
+  express.urlencoded({
+    extended: true,
+    limit: "1mb",
+  })
+);
+app.use((req: Request, res: Response, next: NextFunction) => {
+  const timeout = setTimeout(() => {
+    if (!res.headersSent) {
+      logger.warn({ requestId: req.id, path: req.path }, "Request timeout");
+      res.status(408).json({
+        error: "Request Timeout",
+        message: "Request took too long to process",
+        requestId: req.id,
+      });
+    }
+  }, 30000);
+
+  res.on("finish", () => clearTimeout(timeout));
+  res.on("close", () => clearTimeout(timeout));
+
+  next();
+});
 
 app.get("/health", async (req: Request, res: Response) => {
   try {
