@@ -72,7 +72,6 @@ describe("Integration Tests - Failure Recovery", () => {
   beforeEach(() => {
     jest.clearAllMocks();
 
-    // Setup bank client mock for all tests
     const bankClientModule = require("../services/bank-client");
     if (
       bankClientModule.bankClient &&
@@ -90,7 +89,7 @@ describe("Integration Tests - Failure Recovery", () => {
       const mockStuckPayment = {
         id: "pay_stuck_123",
         idempotency_key: "key_stuck_123",
-        authorization_id: "auth_123", // This is needed for completer to process
+        authorization_id: "auth_123",
         state: "PENDING",
         amount: 5000,
         currency: "USD",
@@ -132,8 +131,6 @@ describe("Integration Tests - Failure Recovery", () => {
       await runCompleter();
 
       expect(mockGetStuckPayments).toHaveBeenCalled();
-      // Just verify the completer ran without errors, withTransaction may not be called
-      // if no payments need processing or if bank client mocking fails
     });
 
     test("should handle database connection drops gracefully", async () => {
@@ -196,7 +193,7 @@ describe("Integration Tests - Failure Recovery", () => {
         }
       });
 
-      // Simulate the transaction attempt through actual function call
+      // Simulate transaction attempt through actual function call
       try {
         await mockWithTransaction(async (client) => {
           await mockCreateIdempotencyKey("test_key_123", "/authorize", {
@@ -228,7 +225,7 @@ describe("Integration Tests - Failure Recovery", () => {
       const mockUpdateRecoveryPoint =
         updateRecoveryPoint as jest.MockedFunction<typeof updateRecoveryPoint>;
 
-      // Mock inconsistent state - key exists but wrong recovery point
+      // Mock inconsistent state: key exists but wrong recovery point
       mockGetIdempotencyKey.mockResolvedValue({
         key: "inconsistent_key_123",
         request_path: "/authorize",
@@ -265,7 +262,6 @@ describe("Integration Tests - Failure Recovery", () => {
           typeof getStuckPendingPayments
         >;
 
-      // Mock payments stuck in various recovery points
       const stuckPayments = [
         {
           id: "pay_stuck_1",
