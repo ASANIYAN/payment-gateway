@@ -121,23 +121,6 @@ The `docker-compose.yml` defines two services:
 - **Credentials:** postgres/0000
 - **Auto-migration:** Runs SQL files from `/migrations` on first startup
 
-#### Application
-
-- **Build:** Uses local Dockerfile
-- **Container Name:** payment-gateway-app
-- **Port:** 3000
-- **Environment:** Development mode with hot reload
-- **Database Connection:** Automatically configured to connect to postgres container
-
-### Development with Docker
-
-The Docker setup includes:
-
-- **Volume mounting** for live code reloading during development
-- **Automatic database setup** with migrations
-- **Environment configuration** optimized for containerized development
-- **Network isolation** with proper service discovery
-
 ## Bank Service Setup
 
 This payment gateway requires a bank service to process payments. The bank service simulates external payment processor APIs and provides endpoints for authorization, capture, void, and refund operations.
