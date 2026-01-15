@@ -9,19 +9,19 @@ export const pool = new Pool({
   connectionTimeoutMillis: 10000,
 });
 
-pool.on("connect", (client) => {
+pool.on("connect", (_client) => {
   logger.debug("New database client connected");
 });
 
-pool.on("acquire", (client) => {
+pool.on("acquire", (_client) => {
   logger.trace("Database client acquired from pool");
 });
 
-pool.on("remove", (client) => {
+pool.on("remove", (_client) => {
   logger.debug("Database client removed from pool");
 });
 
-pool.on("error", (err, client) => {
+pool.on("error", (err, _client) => {
   logger.error({ error: err }, "Unexpected database pool error");
 });
 
