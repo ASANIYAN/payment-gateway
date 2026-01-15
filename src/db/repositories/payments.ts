@@ -1,11 +1,11 @@
 import { query } from "..";
 import { PoolClient } from "pg";
-import logger from "@/utils/logger";
-import { PaymentRow, PaymentState } from "@/types";
+import logger from "../../utils/logger";
+import { PaymentRow, PaymentState } from "../../types";
 import {
   PaymentStateMachine,
   PaymentStateError,
-} from "@/services/payment-state-machine";
+} from "../../services/payment-state-machine";
 
 export type CreatePaymentData = {
   idempotencyKey: string;
@@ -15,7 +15,7 @@ export type CreatePaymentData = {
   currency: string;
 };
 
-export { PaymentStateError } from "@/services/payment-state-machine";
+export { PaymentStateError } from "../../services/payment-state-machine";
 
 export async function createPayment(
   client: PoolClient,

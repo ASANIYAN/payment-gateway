@@ -1,4 +1,4 @@
-import { PaymentState, RecoveryPoint } from "@/types";
+import { PaymentState, RecoveryPoint } from "../types";
 
 export class PaymentStateError extends Error {
   constructor(message: string) {

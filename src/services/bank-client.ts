@@ -1,7 +1,7 @@
 import axios, { AxiosInstance, AxiosError } from "axios";
 import { config } from "../config";
 import logger, { createChildLogger } from "../utils/logger";
-import { PERMANENT_ERROR_CODES } from "@/types/bank-errors";
+import { PERMANENT_ERROR_CODES } from "../types/bank-errors";
 
 export interface BankAuthorizationRequest {
   amount: number; // In cents

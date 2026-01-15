@@ -1,11 +1,11 @@
-import { config } from "@/config";
-import { withTransaction } from "@/db";
+import { config } from "../config";
+import { withTransaction } from "../db";
 import {
   deleteOldIdempotencyKeys,
   deletePayment,
   getStuckPendingPayments,
-} from "@/db/repositories";
-import { createChildLogger } from "@/utils/logger";
+} from "../db/repositories";
+import { createChildLogger } from "../utils/logger";
 
 //   Scenarios handled:
 //    Idempotency keys older than 72 hours

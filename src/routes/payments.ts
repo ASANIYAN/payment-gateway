@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { Router, Request, Response } from "express";
-import logger, { createChildLogger } from "@/utils/logger";
+import logger, { createChildLogger } from "../utils/logger";
 import {
   cacheResponse,
   createIdempotencyKey,
@@ -16,11 +16,11 @@ import {
   updatePaymentRefunded,
   updatePaymentVoided,
   updateRecoveryPoint,
-} from "@/db/repositories";
-import { withTransaction } from "@/db";
-import { bankClient, BankPermanentError } from "@/services/bank-client";
+} from "../db/repositories";
+import { withTransaction } from "../db";
+import { bankClient, BankPermanentError } from "../services/bank-client";
 import pino from "pino";
-import { PaymentResponse } from "@/types";
+import { PaymentResponse } from "../types";
 
 const router = Router();
 

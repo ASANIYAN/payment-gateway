@@ -2,7 +2,7 @@ import pino from "pino";
 import { ServerResponse } from "http";
 import { IncomingMessage } from "http";
 import { Options, pinoHttp } from "pino-http";
-import { config, isDevelopment } from "@/config";
+import { config, isDevelopment } from "../config";
 
 const logger = pino({
   level: config.logging.level,
@@ -49,7 +49,7 @@ export const httpLogger = pinoHttp({
     requestId: (req as any).id,
   }),
 
-  customLogLevel: (req: IncomingMessage, res: ServerResponse, err?: Error) => {
+  customLogLevel: (_req: IncomingMessage, res: ServerResponse, err?: Error) => {
     if (res.statusCode >= 500 || err) {
       return "error";
     }

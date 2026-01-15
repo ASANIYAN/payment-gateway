@@ -1,5 +1,5 @@
-import { config } from "@/config";
-import logger from "@/utils/logger";
+import { config } from "../config";
+import logger from "../utils/logger";
 import { PgBoss } from "pg-boss";
 import { runCompleter } from "./completer";
 import { runReaper } from "./reaper";

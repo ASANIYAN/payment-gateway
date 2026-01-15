@@ -46,7 +46,7 @@ app.use((req: Request, res: Response, next: NextFunction) => {
   next();
 });
 
-app.get("/health", async (req: Request, res: Response) => {
+app.get("/health", async (_req: Request, res: Response) => {
   try {
     const poolStats = getPoolStats();
 
@@ -69,7 +69,7 @@ app.get("/health", async (req: Request, res: Response) => {
   }
 });
 
-app.get("/", (req: Request, res: Response) => {
+app.get("/", (_req: Request, res: Response) => {
   res.json({
     name: "Payment Gateway",
     version: "1.0.0",
@@ -86,7 +86,7 @@ app.use((req: Request, res: Response) => {
   });
 });
 
-app.use((err: Error, req: Request, res: Response, next: NextFunction) => {
+app.use((err: Error, req: Request, res: Response, _next: NextFunction) => {
   (logger.error({
     error: err,
     requestId: req.id,

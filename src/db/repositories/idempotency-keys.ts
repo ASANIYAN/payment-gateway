@@ -1,13 +1,13 @@
-import logger from "@/utils/logger";
+import logger from "../../utils/logger";
 import { query } from "..";
-import { IdempotencyKeyRow, RecoveryPoint } from "@/types";
+import { IdempotencyKeyRow, RecoveryPoint } from "../../types";
 import { PoolClient } from "pg";
 import {
   PaymentStateMachine,
   RecoveryPointError,
-} from "@/services/payment-state-machine";
+} from "../../services/payment-state-machine";
 
-export { RecoveryPointError } from "@/services/payment-state-machine";
+export { RecoveryPointError } from "../../services/payment-state-machine";
 
 export async function createIdempotencyKey(
   key: string,
