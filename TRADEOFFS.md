@@ -8,7 +8,7 @@ The layers include:
 
 - **Data Access Layer** (db folder): Handles all database operations and queries
 - **External Service Layer** (services folder): Manages bank-client.ts and other external API integrations
-- **Business Logic Layer** (routes folder): Contains payment processing logic and API endpoints
+- **API Layer** (routes folder): Contains payment processing logic and API endpoints
 - **Background Process Layer** (jobs folder): Includes completer and reaper jobs for async operations
 
 This separation allows independent testing and modification of each layer, making the system more maintainable and scalable.
