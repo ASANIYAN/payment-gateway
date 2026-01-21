@@ -336,34 +336,47 @@ flowchart TD
 
 ```mermaid
 flowchart TB
-    OS((FicMart OS))
+    %% External Actors
+    Customer((FicMart Shop))
+    BankService[Bank API Service]
 
-    subgraph gateway["Your Payment Gateway (Node.js/TS)"]
+    subgraph Gateway [Payment Gateway Architecture]
         direction TB
         API[API Layer / Routes]
-        SM[State Machine]
-        IK[(Idempotency & Payments DB)]
-        Jobs[Background Jobs: Reaper/Completer]
-        BC[Bank Client]
 
-        API --> SM
-        SM <--> IK
-        Jobs -.->|Reconcile| IK
-        Jobs -.->|Status Check| BC
-        SM --> BC
+        subgraph Logic [Service & Persistence Layer]
+            IK{Idempotency Check}
+            SM[State Machine Validation]
+            DB[(Postgres DB)]
+            BC[Bank Client]
+        end
+
+        subgraph Background [Background Process Layer]
+            CJ[Completer Job]
+            RJ[Reaper Job]
+        end
     end
 
-    subgraph bank["Mock Bank API (External)"]
-        BA[Bank API]
-        BD[(Bank DB)]
-        BA <--> BD
-    end
+    %% Happy Path
+    Customer -->|POST /authorize| API
+    API --> IK
+    IK -->|New Key| SM
+    SM -->|Valid Transition| BC
+    BC -->|Success| BankService
+    BC -->|Persist| DB
 
-    OS ==>|"POST /authorize"| API
-    BC ==>|HTTP + Idempotency-Key| BA
+    %% Error Paths
+    IK -->|Duplicate Key| API
+    SM -->|Invalid Transition| API
+    BC -.->|Timeout/Fail| CJ
 
-    style gateway fill:#f9f9f9,stroke:#333,stroke-width:2px
-    style bank fill:#f0f4ff,stroke:#333,stroke-width:2px
+    %% Recovery Loop
+    CJ -.->|Reconcile| BankService
+    CJ -.->|Sync State| DB
+    RJ -.->|Prune Old Data| DB
+
+    %% External Connections
+    BankService -.->|HTTP 200/400/500| BC
 ```
 
 ## Testing
