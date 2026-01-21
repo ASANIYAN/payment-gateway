@@ -304,34 +304,6 @@ The payment system follows a strict state machine:
 
 The payment gateway processes transactions through a series of validation, state management, and external integration steps:
 
-### Request Processing Flow
-
-```mermaid
-flowchart TD
-    Req([Inbound Request]) --> Auth{Auth & Validate}
-    Auth -- "Fail (400)" --> E1[Error Response]
-
-    Auth -- "Pass" --> IK{Check Idempotency}
-    IK -- "Key Exists" --> IK_Res[Return Cached Response]
-
-    IK -- "New Key" --> DB_Init[Create Record: PENDING]
-
-    DB_Init --> SM{State Machine Valid?}
-    SM -- "Invalid (422)" --> E2[State Conflict Error]
-
-    SM -- "Valid" --> Bank[External Bank API]
-
-    Bank -- "Success" --> Update[Update State: AUTHORIZED]
-    Bank -- "Decline" --> Reject[Update State: DECLINED]
-
-    Bank -- "Timeout/5xx" --> Retry[Retry Strategy]
-    Retry -- "Max Retries Hit" --> Stuck[Mark as STUCK]
-
-    Stuck -.->|Async Recovery| Jobs[Completer Job]
-    Update --> Final[Return 200/201 Success]
-    Reject --> Final
-```
-
 ### System Architecture Overview
 
 ```mermaid
