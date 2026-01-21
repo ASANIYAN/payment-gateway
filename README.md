@@ -295,10 +295,76 @@ GET /health
 
 The payment system follows a strict state machine:
 
-- **PENDING** → **AUTHORIZED** (via authorize)
-- **AUTHORIZED** → **CAPTURED** (via capture)
-- **AUTHORIZED** → **VOIDED** (via void)
-- **CAPTURED** → **REFUNDED** (via refund)
+- **PENDING** --> **AUTHORIZED** (via authorize)
+- **AUTHORIZED** --> **CAPTURED** (via capture)
+- **AUTHORIZED** --> **VOIDED** (via void)
+- **CAPTURED** --> **REFUNDED** (via refund)
+
+## How It Works
+
+The payment gateway processes transactions through a series of validation, state management, and external integration steps:
+
+### Request Processing Flow
+
+```mermaid
+flowchart TD
+    Req([Inbound Request]) --> Auth{Auth & Validate}
+    Auth -- "Fail (400)" --> E1[Error Response]
+
+    Auth -- "Pass" --> IK{Check Idempotency}
+    IK -- "Key Exists" --> IK_Res[Return Cached Response]
+
+    IK -- "New Key" --> DB_Init[Create Record: PENDING]
+
+    DB_Init --> SM{State Machine Valid?}
+    SM -- "Invalid (422)" --> E2[State Conflict Error]
+
+    SM -- "Valid" --> Bank[External Bank API]
+
+    Bank -- "Success" --> Update[Update State: AUTHORIZED]
+    Bank -- "Decline" --> Reject[Update State: DECLINED]
+
+    Bank -- "Timeout/5xx" --> Retry[Retry Strategy]
+    Retry -- "Max Retries Hit" --> Stuck[Mark as STUCK]
+
+    Stuck -.->|Async Recovery| Jobs[Completer Job]
+    Update --> Final[Return 200/201 Success]
+    Reject --> Final
+```
+
+### System Architecture Overview
+
+```mermaid
+flowchart TB
+    OS((FicMart OS))
+
+    subgraph gateway["Your Payment Gateway (Node.js/TS)"]
+        direction TB
+        API[API Layer / Routes]
+        SM[State Machine]
+        IK[(Idempotency & Payments DB)]
+        Jobs[Background Jobs: Reaper/Completer]
+        BC[Bank Client]
+
+        API --> SM
+        SM <--> IK
+        Jobs -.->|Reconcile| IK
+        Jobs -.->|Status Check| BC
+        SM --> BC
+    end
+
+    subgraph bank["Mock Bank API (External)"]
+        BA[Bank API]
+        BD[(Bank DB)]
+        BA <--> BD
+    end
+
+    OS ==>|"POST /authorize"| API
+    BC ==>|HTTP + Idempotency-Key| BA
+
+    style gateway fill:#f9f9f9,stroke:#333,stroke-width:2px
+    style bank fill:#f0f4ff,stroke:#333,stroke-width:2px
+```
 
 ## Testing
 
