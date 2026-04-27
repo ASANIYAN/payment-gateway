@@ -9,19 +9,19 @@ export const pool = new Pool({
   connectionTimeoutMillis: 10000,
 });
 
-pool.on("connect", (client) => {
+pool.on("connect", (_client) => {
   logger.debug("New database client connected");
 });
 
-pool.on("acquire", (client) => {
+pool.on("acquire", (_client) => {
   logger.trace("Database client acquired from pool");
 });
 
-pool.on("remove", (client) => {
+pool.on("remove", (_client) => {
   logger.debug("Database client removed from pool");
 });
 
-pool.on("error", (err, client) => {
+pool.on("error", (err, _client) => {
   logger.error({ error: err }, "Unexpected database pool error");
 });
 
@@ -138,4 +138,32 @@ export function getPoolStats() {
     idle: pool.idleCount,
     waiting: pool.waitingCount,
   };
+}
+
+export function isDatabaseConnectionError(error: any): boolean {
+  if (!error) return false;
+
+  const networkErrors = [
+    "ECONNREFUSED",
+    "ETIMEDOUT",
+    "ECONNRESET",
+    "ENOTFOUND",
+  ];
+  if (networkErrors.includes(error.code)) {
+    return true;
+  }
+
+  const pgConnectionErrors = [
+    "57P01",
+    "57P02",
+    "57P03",
+    "08000",
+    "08003",
+    "08006",
+  ];
+  if (pgConnectionErrors.includes(error.code)) {
+    return true;
+  }
+
+  return false;
 }

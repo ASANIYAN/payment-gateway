@@ -14,7 +14,7 @@ export type RecoveryPoint =
   | "refunded"
   | "finished";
 
-export interface IdempotencyKeyRow {
+export type IdempotencyKeyRow = {
   key: string;
   request_path: string;
   request_params: Record<string, any>;
@@ -24,10 +24,10 @@ export interface IdempotencyKeyRow {
   locked_at: Date | null;
   created_at: Date;
   updated_at: Date;
-}
+};
 
 export type PaymentRow = {
-  id: string; // UUID
+  id: string;
   idempotency_key: string;
   order_id: string;
   customer_id: string;
